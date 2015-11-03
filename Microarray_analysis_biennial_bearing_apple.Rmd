@@ -1,0 +1,665 @@
+---
+pdf_document:
+  highlight: zenburn
+  toc: yes
+author: "Baptiste Guitton"
+date: "November 2015"
+output: pdf_document
+title: "Analysis of microarray data for biennial bearing in 'Gala' apple"
+---
+
+Introduction
+------------
+  
+In the present study, our objective was to investigate whether the processes involved in the transition from juvenile to adult phase are also key regulators of induction of flowering in SAM of adult trees. To achieve this, we studied the effect of the presence of fruit on the expression of genes involved in flowering transition in the terminal meristem of spur bourse shoots in adult apple trees, using a microarray analysis to identify genes and biological processes leading to biennial bearing.  
+
+Shoot Apical Meristems (SAM) were collected from adult 'Gala' (clone 'Galaxy') apple trees with contrasted bearing behavior, i.e. 'ON' trees bearing heavy crop and 'OFF' trees bearing no fruits. 'OFF' trees were completely deflowered at full bloom and no chemical thinning was applied to 'ON' trees. For 'ON' trees, meristems were sampled in terminal position of spurs issued from bourses carrying at least one fruit and for 'OFF' trees, meristems were sampled in terminal position of spurs bearing no fruit. Three collections of terminal buds were performed from May to August 2010, at 28, 48 and 119 Days After Full Bloom (DAFB). This period was considered to cover floral induction, floral initiation and the beginning of floral differentiation on spurs.  
+
+All spot comparisons were made between 'ON' (control) and 'OFF' trees at 28, 48 and 119 DAFB. For each time point, total RNA of two trees per treatment and three meristems per tree and per date, corresponding to six separate RNA extractions mixed in equal quantity constituted a biological replicate. Two independent biological repeats were performed with the 'ON' and 'OFF' cDNA clones labelled with Cy3 and Cy5 fluorescent dyes, respectively. A dye-switch was performed to eliminate any bias resulting from the two fluorescent dyes.  
+  
+The purpose of this present script is to analyze the normalized microarray data with the aim to identify statistically deferentially expressed transcripts between the two treatments.  
+
+### Libraries loading
+
+```{r libraries, warning=FALSE, message=FALSE}
+# Load the specified libraries
+library(knitr)
+library(grid)
+library(VennDiagram)
+library(cluster)
+library(wesanderson)
+```
+
+
+1. Threshold values justification and set-up
+-------------------------------------------------
+
+In our microarray experimentation, the dye-switch method was applied, inverting biological replicates in the same time as the fluorochromes. In this case of experiment, a p-value threshold of 0.05 is usually accepted. However, a p-value of 0.01 can be used to consider only highly significant transcripts.  
+The microarray community recommend considering only genes with a ratio higher to 1 or lower to -1. A ratio value of 0.5 is usually not accepted for publication by reviewers. Based on experiments using both microarray and qRT-PCR, it has been estimated that a log2 ratio value of 1 in a microarray correspond to 1 PCR cycle of difference between the test and the control in a qRT-PCR experiment.    
+Since data were already normalized using the lowess method, there is no need to filter on expression intensity. Indeed, normalized intensity values were subtracted from the background to provide an estimation of the transcript expression levels.  
+Due to the recent whole genome duplication that occurred in the apple genome (Velasco *et al.*, 2010), duplicated genes share high similarity sequence. In the present analysis, we considered only transcripts that were amplified by probes highly specific to the targeted transcript. Indeed, non-specific probes are not of interest since they can amplify several homeologous transcript copies and thus provide incorrect expression values for a given targeted transcript.
+  
+```{r threeshold_values, echo=TRUE, eval=TRUE, tidy=TRUE}
+# Threshold for p-value
+pval_threshold <- 0.01
+
+# Threshold for ratio
+ratio_threshold_up <- 1 # Negative ratios correspond to up-regulated genes in "OFF" trees
+ratio_threshold_down <- -1 # Positive ratios correspond to up-regulated genes in "ON" trees
+
+# Threshold for expression intensity
+intensity_threshold <- -0.2
+
+# Threshold for probe specificity
+probe_specificity_threshold <- 2
+```
+
+
+2. Data importation
+-------------------
+
+All parameters that will be used for filtering and processing the data are saved in R objects that will be used in the following procedure.
+
+```{r declare_object_names}
+# Name of the source file
+file <- "Microarray_biennial_bearing_apple.csv"
+
+# Probe parameters
+probe_id <- "genes_probe_id"
+gene_id <- "genes_seq_id"
+AT_id <- "AT_Id"
+probe_specificity <- "Spec"
+probe_sense <- "Sense"
+
+# Date 1
+Expression_T1_D1 <- "Meristeme_1_2_ON_date1"
+Expression_T2_D1 <- "Meristeme_1_2_Off_date1"
+Ratio_D1 <- "R1"
+Pval_D1 <- "pval1"
+
+# Date 2
+Expression_T1_D2 <- "Meristeme_1_2_ON_date2"
+Expression_T2_D2 <- "Meristeme_1_2_Off_date2"
+Ratio_D2 <- "R2"
+Pval_D2 <- "pval2"
+
+# Date 3
+Expression_T1_D3 <- "Meristeme_1_2_ON_date3"
+Expression_T2_D3 <- "Meristeme_1_2_Off_date3"
+Ratio_D3 <- "R3"
+Pval_D3 <- "pval3"
+```
+
+The present analysis is run on data that were first normalized with the lowess method. The present csv file contains normalized expression values, log2 ratio with associated p-value and FDR, along with annotation information for each probe.  
+
+```{r data_importation}
+# Read data file
+Microarray_Data <- read.csv(file, header=T, sep=";", dec=".", na.string="")
+```
+
+3. Graphic representation of probe sense before filtering
+----------------------------------------------------------
+
+### 3.1. Selection of probe sense
+
+The following analysis will only be conducted on sense probes.  
+```{r probe_sense_filtering, echo=TRUE}
+# Creation of two datasets: one for sense and one for anti-sense expressed transcripts
+forward_sense_probes <- Microarray_Data[Microarray_Data[,probe_sense] == "S", ]
+reverse_sense_probes <-  Microarray_Data[Microarray_Data[,probe_sense] == "AS", ]
+
+# The "_r" is deleted in the gene_id column 
+forward_sense_probes[,gene_id] <- gsub(pattern = "_r", 
+                            replacement = "", x = forward_sense_probes[,gene_id])
+```
+After probe sense filtering, `r nrow(forward_sense_probes)` forward sense probes are selected and `r nrow(reverse_sense_probes)` reverse sense probes are put aside.
+
+### 3.2. Graphic representation before filtering
+
+Before applying any filters, the probe density is graphically represented in relation to different parameters: probe specificity, ratio P-value, expression intensity and log ratio value. These representations enable to describe how probes behave in relation to these parameters and enable to visualize the effect of the filtering procedures.  
+  
+```{r graph_probe_specificity_before_filtering, echo=TRUE, eval=TRUE, fig.height=3, fig.width=3, fig.align='center',echo=FALSE}
+# Draw histogram of probe sense specificity
+hist(forward_sense_probes[,probe_specificity], xlab="Probe specificity", 
+     ylab = "Number of probes", xaxt='n', col = "deepskyblue4", cex.main = 0.8, 
+     main = "Fig.1. Distribution of probe specificity of \n forward sense probes")
+# Setup x axis
+axis(side=1, 1:4, labels=seq(1,4,1))
+# Add a line for the threeshlod
+abline(v=probe_specificity_threshold,col=2,lty=6)
+```
+  
+```{r graph_expression_intensity_before_filtering, echo=TRUE, eval=TRUE, fig.height=7, fig.width=10, echo=FALSE}
+  par(mfrow=c(2,3), pty='m',oma = c(0, 0, 3, 0))
+hist(forward_sense_probes[,Expression_T1_D1], main="ON trees - 28 DAFB", xlab="Expression
+     level", ylab = "Number of probes", xlim=c(-2,8), col = "deepskyblue4")
+  abline(v=intensity_threshold,col=2,lty=6)
+hist(forward_sense_probes[,Expression_T2_D1], main="OFF trees - 28 DAFB", xlab="Expression
+     level", ylab = "Number of probes", xlim=c(-2,8), col = "deepskyblue4")
+  abline(v=intensity_threshold,col=2,lty=6)
+hist(forward_sense_probes[,Expression_T1_D2], main="ON trees - 48 DAFB", xlab="Expression
+     level", ylab = "Number of probes", xlim=c(-2,8), col = "deepskyblue4")
+  abline(v=intensity_threshold,col=2,lty=6)
+hist(forward_sense_probes[,Expression_T2_D2], main="OFF trees - 48 DAFB", xlab="Expression
+     level", ylab = "Number of probes", xlim=c(-2,8), col = "deepskyblue4")
+  abline(v=intensity_threshold,col=2,lty=6)
+hist(forward_sense_probes[,Expression_T1_D3], main="ON trees - 119 DAFB", xlab="Expression
+     level", ylab = "Number of probes", xlim=c(-2,8), col = "deepskyblue4")
+  abline(v=intensity_threshold,col=2,lty=6)
+hist(forward_sense_probes[,Expression_T2_D3], main="OFF trees - 119 DAFB", xlab="Expression
+     level", ylab = "Number of probes", xlim=c(-2,8), col = "deepskyblue4")
+  abline(v=intensity_threshold,col=2,lty=6)
+# Add a title to the graph window
+mtext("Fig.2. Distribution of expression intensity by treatment for each time point for forward sense probes", outer = TRUE, cex = 1.2)
+```
+
+```{r graph_pvalue_before_filtering, fig.height=3.5, fig.width=10, echo=FALSE}
+        par(mfrow=c(1,3), pty='m',oma = c(0, 0, 3, 0))
+hist(forward_sense_probes[,Pval_D1], main="P-value - 28 DAFB", xlab="P-value", 
+     ylab = "Number of probes", breaks=24, col = "deepskyblue4")
+     abline(v=pval_threshold,col=2,lty=6) 
+hist(forward_sense_probes[,Pval_D2], main="P-value - 48 DAFB", xlab="P-value", 
+     ylab = "Number of probes", breaks=24, col = "deepskyblue4")
+     abline(v=pval_threshold,col=2,lty=6) 
+hist(forward_sense_probes[,Pval_D3], main="P-value - 119 DAFB", xlab="P-value", 
+     ylab = "Number of probes", breaks=24, col = "deepskyblue4")
+     abline(v=pval_threshold,col=2,lty=6)
+# Add a title to the graph window
+mtext("Fig.3. Distribution of p-value associated to the log2 ratio for each time point for forward sense probes", outer = TRUE, cex = 1.2)
+```
+
+```{r graph_log_ratio_before_filtering, fig.height=3.5, fig.width=10, echo=FALSE}
+par(mfrow=c(1,3), pty='m',oma = c(0, 0, 3, 0))
+hist(forward_sense_probes[,Ratio_D1], main="Ratio - 28 DAFB", xlab="Ratio", 
+     ylab = "Number of probes", breaks=24, col = "deepskyblue4")
+     abline(v=ratio_threshold_up,col=2,lty=6)        
+     abline(v=ratio_threshold_down,col=2,lty=6)        
+hist(forward_sense_probes[,Ratio_D2], main="Ratio - 48 DAFB", xlab="Ratio", 
+     ylab = "Number of probes", breaks=24, col = "deepskyblue4")
+     abline(v=ratio_threshold_up,col=2,lty=6)        
+     abline(v=ratio_threshold_down,col=2,lty=6)                
+hist(forward_sense_probes[,Ratio_D3], main="Ratio - 119 DAFB", xlab="Ratio", 
+     ylab = "Number of probes", breaks=24, col = "deepskyblue4")
+     abline(v=ratio_threshold_up,col=2,lty=6)        
+     abline(v=ratio_threshold_down,col=2,lty=6)        
+# Add a title to the graph window
+mtext("Fig.4. Distribution of log2 ratio for each time point for forward sense probes",
+      outer = TRUE, cex = 1.2)
+```
+
+4. Data filtering
+-----------------
+
+### 4.1. Probe specificity filtering    
+        
+Herein below, we are applying the probe specificity filter to consider only probes that show specificity lower than `r probe_specificity_threshold` within the sense probes.
+
+```{r probe_specificity_filtering}
+specific_probes <- forward_sense_probes[forward_sense_probes[, probe_specificity] 
+                                        <= probe_specificity_threshold, ]
+```
+
+After filtering, `r nrow(specific_probes)` sense probes with specific design will be considered in further analyses.
+
+### 4.2. Expression intensity filtering    
+  
+Herein below, we are applying the expression intensity filter to consider only probes that show expression higher than `r intensity_threshold` within the sense probes.
+
+```{r intensity_filtering}
+# Application of the filter to the 3 dates
+D1_expressed <- specific_probes[specific_probes[,Expression_T1_D1] >= intensity_threshold
+                            & specific_probes[,Expression_T2_D1] >= intensity_threshold,]
+D2_expressed <- specific_probes[specific_probes[,Expression_T1_D2] >= intensity_threshold
+                            & specific_probes[,Expression_T2_D2] >= intensity_threshold,]
+D3_expressed <- specific_probes[specific_probes[,Expression_T1_D3] >= intensity_threshold
+                            & specific_probes[,Expression_T2_D3] >= intensity_threshold,]
+```
+
+After filtering, `r nrow(unique(rbind(D1_expressed, D2_expressed, D3_expressed)))` probes showed significant expression at least one of the three time points.
+
+### 4.3. P-value filtering    
+
+Herein below, only probes that showed significant regulation between the two treatments in at least one of the three dates will be considered (p-value < `r pval_threshold`).
+
+```{r pvalue_filtering}
+# Application of the filter to the 3 dates
+D1 <- D1_expressed[D1_expressed[, Pval_D1] <= pval_threshold,]
+D2 <- D2_expressed[D2_expressed[, Pval_D2] <= pval_threshold,]
+D3 <- D3_expressed[D3_expressed[, Pval_D3] <= pval_threshold,]
+```
+
+After p-value filtering, a total `r nrow(unique(rbind(D1, D2, D3)))` unique probes showed significant regulation for at least one of the three time points of the experiment, including `r nrow(D1)`, `r nrow(D2)` and `r nrow(D3)` probes for 28, 48 and 119 DAFB, respectively.
+
+#### 4.4. Log2 ratio filtering    
+~
+
+The log ratio filtering enables to select only transcripts having a sufficient difference of expression between the two treatments which have biological meaning. In this analysis, only probes that show differential expression lower than `r ratio_threshold_down` for up-regulated genes in 'ON' trees and higher than `r ratio_threshold_up` for up-regulated genes in 'OFF' trees, will be considered within the previously selected probes.
+
+```{r ratio_filtering}
+# Application of the filter to the 3 dates and the two treatments
+D1_ON_up <- D1[D1[, Ratio_D1] <= ratio_threshold_down,]
+D1_OFF_up <- D1[D1[, Ratio_D1] >= ratio_threshold_up,]
+D2_ON_up <- D2[D2[, Ratio_D2] <= ratio_threshold_down,]
+D2_OFF_up <- D2[D2[, Ratio_D2] >= ratio_threshold_up,]
+D3_ON_up <- D3[D3[, Ratio_D3] <= ratio_threshold_down,]
+D3_OFF_up <- D3[D3[, Ratio_D3] >= ratio_threshold_up,]
+
+# Bind results of ON and OFF trees to get the total per date
+D1_ON_OFF <- unique(rbind(D1_ON_up,D1_OFF_up))
+D2_ON_OFF <- unique(rbind(D2_ON_up,D2_OFF_up))
+D3_ON_OFF <- unique(rbind(D3_ON_up,D3_OFF_up))
+
+# Make a data frame containing transcripts that were differentially expressed at least one time
+genes_modulated_at_least_one_time <- unique(rbind(D1_ON_OFF,D2_ON_OFF,D3_ON_OFF))
+```
+
+After log ratio filtering, a total of `r nrow(genes_modulated_at_least_one_time)` unique probes will be considered for further analyses, including `r nrow(D1_ON_OFF)`, `r nrow(D2_ON_OFF)` and `r nrow(D3_ON_OFF)` probes for 28, 48 and 119 DAFB, respectively.  
+
+### 4.5. Selected gene-set    
+
+A total of `r nrow(genes_modulated_at_least_one_time)` genes were identified as statistically significant for at least one of the three time points, representing `r (nrow(genes_modulated_at_least_one_time)*100)/nrow(forward_sense_probes)`% of the sense probes present in the microarray. The number of up-regulated genes in both 'ON' (ratio < `r ratio_threshold_down`) and 'OFF' trees (ratio > `r ratio_threshold_up`) increased through time with a higher number of up-regulated genes in 'ON' trees than in 'OFF' trees (Tab.1 and Fig. 5). Among these genes, `r nrow(D1_ON_up)` were up-regulated in 'ON' trees at 28 DAFB whereas `r nrow(D1_OFF_up)` in 'OFF' trees. At 48 DAFB, `r nrow(D2_ON_up)` and `r nrow(D2_OFF_up)` genes were up-regulated in 'ON' and 'OFF' trees, respectively. At 119 DAFB, `r nrow(D3_ON_up)` genes were up-regulated in 'ON' trees while `r nrow(D3_OFF_up)` in 'OFF' trees. Some of Arabidopsis gene accessions were found several times in the data-set, indicating that duplicated homeologous genes were present in the set of differentially expressed transcripts.  
+  
+The following table and barplot give the number of probes to consider for further analysis per date and per treatment.  
+
+#### Tab.1. Number of genes significantly up-regulated in each treatment and each date.
+
+```{r list_number_probes_for_analysis, results='asis', echo=FALSE}
+# Make a data frame of 3 columns: treatment, date and number of probes.
+up_down_genes_by_date<-matrix(cbind(
+  Treatment=c("ON","OFF","Total", "ON","OFF","Total","ON","OFF","Total"), 
+  Date=c("D1","D1","D1","D2","D2","D2","D3","D3","D3"),
+  Nb_Probres= c(nrow(D1_ON_up),nrow(D1_OFF_up),nrow(D1_ON_OFF),
+                nrow(D2_ON_up),nrow(D2_OFF_up),nrow(D2_ON_OFF),
+                nrow(D3_ON_up),nrow(D3_OFF_up),nrow(D3_ON_OFF))),
+  ncol=3, nrow=9, byrow=F, 
+  dimnames = list(c("D1","D1","D1","D2","D2","D2","D3","D3","D3"),
+  c("Treatment", "Date", "Nb_probes")))
+# Edit the matrix using the kable function
+kable(up_down_genes_by_date, format = "markdown", row.names=F) 
+```
+
+```{r graph_number_probes_for_analysis, fig.height=6, fig.width=5, fig.align='center',echo=FALSE}
+par(mfrow=c(1,1), pty='m',oma = c(0, 0, 3, 0))
+require(grDevices) # for colours
+barplot(height = cbind("28" = c(nrow(D1_ON_up),nrow(D1_OFF_up)),
+                       "48" = c(nrow(D2_ON_up),nrow(D2_OFF_up)),
+                       "119" = c(nrow(D3_ON_up),nrow(D3_OFF_up))),
+        beside = TRUE, width = c(400, 400), ylim=c(0,400), ylab="Number of probes",
+        xlab="DAFB", col = c("grey", "black"), legend.text = c("ON trees", "OFF trees"),
+        args.legend = list(x = "topright"))
+text (575, nrow(D1_ON_up)+25, labels=nrow(D1_ON_up))
+text (1000, nrow(D1_OFF_up)+25, labels=nrow(D1_OFF_up))
+text (1800, nrow(D2_ON_up)+25, labels=nrow(D2_ON_up))
+text (2200, nrow(D2_OFF_up)+25, labels=nrow(D2_OFF_up))
+text (3000, nrow(D3_ON_up)+25, labels=nrow(D3_ON_up))
+text (3400, nrow(D3_OFF_up)+25, labels=nrow(D3_OFF_up))
+# Add a title to the graph window
+mtext("Fig.5. Number of genes significantly up-regulated in \n each treatment and each date", outer = TRUE, cex = 1)
+```
+  
+5. Graphic representation after filtering
+------------------------------------------
+
+### 5.1. Probe distribution
+```{r graph_after_filtering, fig.height=7, fig.width=10, echo=FALSE}
+# Graphic represenetation of the probe density in function to expression intensity
+par(mfrow=c(2,3), pty='m',oma = c(0, 0, 3, 0))
+hist(D1_ON_up[,Expression_T1_D1], main="ON trees - 28 DAFB", xlab="Expression intensity", 
+     xlim=c(0,8), ylim=c(0,30), breaks = 20, ylab = "Number of probes", col = "cadetblue3")
+hist(D1_OFF_up[,Expression_T2_D1], main="OFF trees - 28 DAFB", xlab="Expression intensity", 
+     xlim=c(0,8), ylim=c(0,30), breaks = 20, ylab = "Number of probes", col = "cadetblue3")
+hist(D2_ON_up[,Expression_T1_D2], main="ON trees - 48 DAFB", xlab="Expression intensity", 
+     xlim=c(0,8), ylim=c(0,30), breaks = 20, ylab = "Number of probes", col = "cadetblue3")
+hist(D2_OFF_up[,Expression_T2_D2], main="OFF trees - 48 DAFB", xlab="Expression intensity", 
+     xlim=c(0,8), ylim=c(0,30), breaks = 20, ylab = "Number of probes", col = "cadetblue3")
+hist(D3_ON_up[,Expression_T1_D3], main="ON trees - 119 DAFB", xlab="Expression intensity",
+     xlim=c(0,8), ylim=c(0,30), breaks = 20, ylab = "Number of probes", col = "cadetblue3")
+hist(D3_OFF_up[,Expression_T2_D3], main="OFF trees - 119 DAFB", xlab="Expression intensity",
+     xlim=c(0,8), ylim=c(0,30), breaks = 20, ylab = "Number of probes", col = "cadetblue3")
+# Add a title to the graph window
+mtext("Fig.6. Distribution of probe density in relation to expression intensity of selected probes", outer = TRUE, cex = 1.2)
+       
+# Graphic represenetation of probe density in relation to the P-value
+par(mfrow=c(2,3), pty='m',oma = c(0, 0, 3, 0))
+hist(D1_ON_OFF[, Pval_D1], main="P-value - 28 DAFB", xlab="P-value", breaks=24, 
+     ylab = "Number of probes", ylim = c(0,250), col = "cadetblue3")
+hist(D2_ON_OFF[, Pval_D2], main="P-value - 48 DAFB", xlab="P-value", breaks=24, 
+     ylab = "Number of probes", ylim = c(0,250), col = "cadetblue3")
+hist(D3_ON_OFF[, Pval_D3], main="P-value - 119 DAFB", xlab="P-value", breaks=24, 
+     ylab = "Number of probes", ylim = c(0,250), col = "cadetblue3")
+
+# Graphic represenetation of probe density in relation to the expression level
+hist(D1_ON_OFF[, Ratio_D1], main="Log2 Ratio - 28 DAFB", xlab="Log2 Ratio", breaks=24, 
+     ylab = "Number of probes", ylim = c(0,100), col = "cadetblue3")
+hist(D2_ON_OFF[, Ratio_D2], main="Log2 Ratio - 48 DAFB", xlab="Log2 Ratio", breaks=24, 
+     ylab = "Number of probes", ylim = c(0,100), col = "cadetblue3")
+hist(D3_ON_OFF[, Ratio_D3], main="Log2 Ratio - 119 DAFB", xlab="Log2 Ratio", breaks=24, 
+     ylab = "Number of probes", ylim = c(0,100), col = "cadetblue3")
+# Add a title to the graph window
+mtext("Fig.7. Distribution of probe density in relation to p-value and log2 ratio of selected probes", outer = TRUE, cex = 1.2)
+```
+
+### 5.2. Venn Diagram  
+
+All comparisons were made within 'OFF' trees and 'ON' trees at each time point. Using venn diagram we are representing transcripts significantly regulated at each time point (28, 48 and 119 DAFB) and jointly over time points. For this, the number of transcript common over time points first is determined. Then, venn diagrams are represented using these groups and the function "draw.triple.venn" (package "VennDiagram").
+  
+```{r lists_for_Venn_diagram}
+# Merge matrixes of probes up-regulated in 'OFF' trees to found common genes over dates
+D12_OFF_up <- merge(x= D1_OFF_up, y= D2_OFF_up, by= "genes_seq_id")
+D13_OFF_up <- merge(x= D1_OFF_up, y= D3_OFF_up, by= "genes_seq_id")
+D23_OFF_up <- merge(x= D2_OFF_up, y= D3_OFF_up, by= "genes_seq_id")
+D123_OFF_up <- merge(x= D12_OFF_up, y= D3_OFF_up, by= "genes_seq_id")
+
+# Merge matrixes of probes up-regulated in 'ON' trees to found common genes over dates
+D12_ON_up <- merge(x= D1_ON_up, y= D2_ON_up, by= "genes_seq_id")
+D13_ON_up <- merge(x= D1_ON_up, y= D3_ON_up, by= "genes_seq_id")
+D23_ON_up <- merge(x= D2_ON_up, y= D3_ON_up, by= "genes_seq_id")
+D123_ON_up <- merge(x= D12_ON_up, y= D3_ON_up, by= "genes_seq_id")
+```
+
+#### Fig.8. Generalized Venn diagram with three sets of 28 (grey), 48 (red), and 119 (blue) DAFB and their intersections for up-regulated genes in 'ON' trees
+~
+
+```{r Venn_diagram_ON, echo=TRUE, eval = FALSE, fig.height=4, fig.width=4, fig.align='center'}
+par(mfrow=c(1,1), pty='m',oma = c(0, 0, 3, 0))
+# Venndiagram for up-regulated genes in ON trees
+venn.plot_down <- draw.triple.venn(
+  area1 = length(unique(D1_ON_up$genes_seq_id)),
+  area2 = length(unique(D2_ON_up$genes_seq_id)),
+  area3 = length(unique(D3_ON_up$genes_seq_id)),
+  n12 = length(unique(D12_ON_up$genes_seq_id)),
+  n23 = length(unique(D23_ON_up$genes_seq_id)),
+  n13 = length(unique(D13_ON_up$genes_seq_id)),
+  n123 = length(unique(D123_ON_up$genes_seq_id)),
+  category = c("28 DAFB", "48 DAFB", "119 DAFB"),
+  fill = c("#899DA4", "#C93312", "cornflowerblue"),
+  col = c("#899DA4", "#C93312", "cornflowerblue"),
+  lty = "dashed", lwd = 1, 
+  alpha = 0.8,
+  cex = 2,
+  cat.cex = 1.2,
+  cat.col = c("#899DA4", "#C93312", "cornflowerblue"));
+```
+
+
+#### Fig.9. Generalized Venn diagram with three sets of 28 (grey), 48 (red), and 119 (blue) DAFB and their intersections for up-regulated genes in 'OFF' trees.
+~
+
+```{r Venn_diagram_OFF, echo=TRUE, eval = FALSE, fig.height=4, fig.width=4, fig.align='center'}
+# Venndiagram for up-regulated genes in OFF trees
+grid.newpage();
+venn.plot_up <- draw.triple.venn(
+  area1 = length(unique(D1_OFF_up$genes_seq_id)),
+  area2 = length(unique(D2_OFF_up$genes_seq_id)),
+  area3 = length(unique(D3_OFF_up$genes_seq_id)),
+  n12 = length(unique(D12_OFF_up$genes_seq_id)),
+  n23 = length(unique(D23_OFF_up$genes_seq_id)),
+  n13 = length(unique(D13_OFF_up$genes_seq_id)),
+  n123 = length(unique(D123_OFF_up$genes_seq_id)),
+  category = c("28 DAFB", "48 DAFB", "119 DAFB"),
+  fill = c("#899DA4", "#C93312", "cornflowerblue"),
+  scaled = TRUE, euler.d = TRUE,
+  lwd = 1, col = c("#899DA4", "#C93312", "cornflowerblue"),
+  lty = "dashed",
+  alpha = 0.8,
+  rotation.degree = 0,
+  cex = 2,
+  cat.cex = 1.2,
+  cat.col = c("#899DA4", "#C93312", "cornflowerblue"));
+```
+
+6. Exportation of transcript lists
+----------------------------------
+
+### 6.1. List of Arabidopsis accessions homologous to differentially expressed transcripts
+
+Different lists of Arabidopsis accessions homologous to differentially expressed transcripts are exported in text files. These lists can be then used as input for single enrichment analyses (AgriGO, http://bioinfo.cau.edu.cn/agriGO/) or for gene network investigation (STRING 9.1., http://string-db.org/). The entire set of differentially expressed transcripts at least one of the three time points (`r nrow(genes_modulated_at_least_one_time)` transcripts) is divided in different sub-groups (by time point, by treatment, by cluster) which will enable to perform annotation studies at different levels.
+
+#### 6.1.1. List of Arabidopsis accessions per time point (28, 48 and 119 DAFB) for transcripts significantly regulated
+~
+
+```{r Arabidopsis_accessions_list}
+write.table(as.data.frame(sort(D1_ON_OFF[, AT_id])),file = "AT_id_date_1.txt", sep="\t", 
+            quote = F, row.names = FALSE, col.names=FALSE, na = "NA")  
+write.table(as.data.frame(sort(D2_ON_OFF[, AT_id])),file = "AT_id_date_2.txt", sep="\t", 
+            quote = F, row.names = FALSE, col.names=FALSE, na = "NA")  
+write.table(as.data.frame(sort(D3_ON_OFF[, AT_id])),file = "AT_id_date_3.txt", sep="\t", 
+            quote = F, row.names = FALSE, col.names=FALSE, na = "NA")  
+```
+
+#### 6.1.2. List of Arabidopsis accessions for each time point for transcripts up-regulated in 'OFF' trees
+~
+
+```{r Arabidopsis_accessions_list_OFF}
+write.table(as.data.frame(sort(D12_OFF_up$AT_Id.x)),file = "AT_id_date_12_OFF.txt", 
+            sep = "\t", quote = F, row.names = FALSE, col.names = FALSE, na = "NA")  
+write.table(as.data.frame(sort(D13_OFF_up$AT_Id.x)),file = "AT_id_date_13_OFF.txt", 
+            sep = "\t", quote = F, row.names = FALSE, col.names = FALSE, na = "")  
+write.table(as.data.frame(sort(D23_OFF_up$AT_Id.x)),file = "AT_id_date_23_OFF.txt", 
+            sep = "\t", quote = F, row.names = FALSE, col.names = FALSE, na = "")  
+write.table(as.data.frame(sort(D123_OFF_up$AT_Id.x)),file = "AT_id_date_123_OFF.txt", 
+            sep = "\t", quote = F, row.names = FALSE, col.names = FALSE, na = "")  
+```
+
+#### 6.1.3. List of Arabidopsis accessions for each time point for transcripts up-regulated in 'ON' trees
+~
+
+```{r Arabidopsis_accessions_list_ON}
+write.table(as.data.frame(sort(D12_ON_up$AT_Id.x)),file = "AT_id_date_12_ON.txt", 
+            sep = "\t", quote = F, row.names = FALSE, col.names = FALSE)  
+write.table(as.data.frame(sort(D13_ON_up$AT_Id.x)),file = "AT_id_date_13_ON.txt", 
+            sep = "\t", quote = F, row.names = FALSE, col.names = FALSE)  
+write.table(as.data.frame(sort(D23_ON_up$AT_Id.x)),file = "AT_id_date_23_ON.txt", 
+            sep = "\t", quote = F, row.names = FALSE, col.names = FALSE)  
+write.table(as.data.frame(sort(D123_ON_up$AT_Id.x)),file = "AT_id_date_123_ON.txt", 
+            sep = "\t", quote = F, row.names = FALSE, col.names = FALSE)  
+```
+
+### 6.2. Matrices of significantly differentially expressed transcripts
+
+After the filtering procedure, the matrix containing only significantly differentially expressed transcripts is exported.
+```{r genes_modulated_at_least_one_time}
+# Export the matrix of the differentially expressed transcripts
+write.table(genes_modulated_at_least_one_time, file = "genes_modulated_at_least_one_time.txt",
+            sep = "\t", quote = F, row.names = FALSE)
+# Export the matrices of the differentially expressed transcripts per time point
+write.table(as.data.frame(D1_ON_OFF),file = "Date_1_matrix.txt", sep = "\t", quote = F, 
+            row.names = FALSE, col.names = TRUE, na = "NA")  
+write.table(as.data.frame(D2_ON_OFF),file = "Date_2_matrix.txt", sep = "\t", quote = F, 
+            row.names = FALSE, col.names = TRUE, na = "NA")  
+write.table(as.data.frame(D3_ON_OFF),file = "Date_3_matrix.txt", sep = "\t", quote = F, 
+            row.names = FALSE, col.names = TRUE, na = "NA")  
+```
+
+7. Duplicated genes in the apple genome
+---------------------------------------
+
+Of the 648 transcripts differentially expressed in our experiment, 535 were significantly homologous to an Arabidopsis gene, while the 113 remaining transcripts did not share significant homology with any Arabidopsis gene. The 535 annotated apple transcripts corresponded to 426 unique Arabidopsis genes, due to the recent whole genome duplication that occurred in the apple genome (Velasco *et al.*, 2010). These transcripts are of particular interest since their expression is altered by the treatment which is confirmed on two or several transcripts. These transcripts can be studied in detail. 
+
+### 7.1. Duplicated genes at 28 DAFB
+  
+```{r Duplicated_genes_28_DAFB}
+# Set variables as character
+D1_ON_OFF$AT_Id <- as.character(D1_ON_OFF$AT_Id)
+D1_ON_OFF$Molecular_Function <- as.character(D1_ON_OFF$Molecular_Function)
+# Select the 30 first characters of the AT_function
+D1_ON_OFF$At_Function <- as.character(substr(D1_ON_OFF$At_Function, 1, 30))
+
+# Select only probes with an Arabidopsis accession
+D1_ON_OFF_1 <- subset(x = D1_ON_OFF, AT_Id != "NA")
+
+# Count the number of MDP per Arabidopsis accession
+Freq_D1 <- as.data.frame(table(D1_ON_OFF_1$AT_Id))
+colnames(Freq_D1) <- c("AT_Id", "Freq")
+# Paste the number of MDP per Arabidopsis accession to the data frame
+D1_ON_OFF_comp <- merge(x = D1_ON_OFF_1, y = Freq_D1, by = "AT_Id")
+
+# Make a table
+D1_AT_Id <- as.data.frame(cbind(D1_ON_OFF_comp$AT_Id, D1_ON_OFF_comp$Freq, 
+            D1_ON_OFF_comp$At_Function, D1_ON_OFF_comp$Molecular_Function))
+colnames(D1_AT_Id) <- c("AT_Id", "Nb MDP", "At_Function","Molecular_Function")
+D1_AT_Id <- D1_AT_Id[order(D1_AT_Id[,"Nb MDP"],decreasing =T),]
+# Remove duplicated rows
+D1_AT_Id <- unique.data.frame(D1_AT_Id)
+# Edit the table
+kable(D1_AT_Id[1:7,], row.names=FALSE)
+```
+
+### 7.2. Duplicated genes at 48 DAFB
+
+```{r Duplicated_genes_48_DAFB}
+# Set variables as character
+D2_ON_OFF$AT_Id <- as.character(D2_ON_OFF$AT_Id)
+D2_ON_OFF$Molecular_Function <- as.character(D2_ON_OFF$Molecular_Function)
+# Select the 30 first characters of the AT_function
+D2_ON_OFF$At_Function <- as.character(substr(D2_ON_OFF$At_Function, 1, 30))
+
+# Select only probes with an Arabidopsis accession
+D2_ON_OFF_1 <- subset(x = D2_ON_OFF, AT_Id != "NA")
+
+# Count the number of MDP per Arabidopsis accession
+Freq_D2 <- as.data.frame(table(D2_ON_OFF_1$AT_Id))
+colnames(Freq_D2) <- c("AT_Id", "Freq")
+# Paste the number of MDP per Arabidopsis accession to the data frame
+D2_ON_OFF_comp <- merge(x = D2_ON_OFF_1, y = Freq_D2, by = "AT_Id")
+
+# Make a table
+D2_AT_Id <- as.data.frame(cbind(D2_ON_OFF_comp$AT_Id, D2_ON_OFF_comp$Freq, 
+              D2_ON_OFF_comp$At_Function, D2_ON_OFF_comp$Molecular_Function))
+colnames(D2_AT_Id) <- c("AT_Id", "Nb MDP", "At_Function","Molecular_Function")
+D2_AT_Id <- D2_AT_Id[order(D2_AT_Id[,"Nb MDP"],decreasing =T),]
+# Remove duplicated rows
+D2_AT_Id <- unique.data.frame(D2_AT_Id)
+kable(D2_AT_Id[1:35,], row.names=FALSE)
+```
+
+### 7.3. Duplicated genes at 119 DAFB
+
+```{r Duplicated_genes_119_DAFB}
+# Set variables as character
+D3_ON_OFF$AT_Id <- as.character(D3_ON_OFF$AT_Id)
+D3_ON_OFF$Molecular_Function <- as.character(D3_ON_OFF$Molecular_Function)
+# Select the 30 first characters of the AT_function
+D3_ON_OFF$At_Function <- as.character(substr(D3_ON_OFF$At_Function, 1, 30))
+
+# Select only probes with an Arabidopsis accession
+D3_ON_OFF_1 <- subset(x = D3_ON_OFF, AT_Id != "NA")
+
+# Count the number of MDP per Arabidopsis accession
+Freq_D3 <- as.data.frame(table(D3_ON_OFF_1$AT_Id))
+colnames(Freq_D3) <- c("AT_Id", "Freq")
+# Paste the number of MDP per Arabidopsis accession to the data frame
+D3_ON_OFF_comp <- merge(x = D3_ON_OFF_1, y = Freq_D3, by = "AT_Id")
+
+# Make a table
+D3_AT_Id <- as.data.frame(cbind(D3_ON_OFF_comp$AT_Id, D3_ON_OFF_comp$Freq, 
+                D3_ON_OFF_comp$At_Function, D3_ON_OFF_comp$Molecular_Function))
+colnames(D3_AT_Id) <- c("AT_Id", "Nb MDP", "At_Function","Molecular_Function")
+D3_AT_Id <- D3_AT_Id[order(D3_AT_Id[,"Nb MDP"],decreasing =T),]
+# Remove duplicated rows
+D3_AT_Id <- unique.data.frame(D3_AT_Id)
+kable(D3_AT_Id[1:56,], row.names=FALSE)
+```
+
+
+8. Genomic position of genes differentially expressed
+-----------------------------------------------------
+
+The best hit reports of blastp of Malus x domestica genome v1.0 proteins file (Malus_x_domestica.v1.0_gene_
+pep_function_101210.formated.xls) made available by the Genome Database for Rosaceae (GDR, November 2014 , http://www.rosaceae.org/) includes genome position of predicted genes. This file is used to retrieve genomic position of genes that showed significant differential expression for at least one of the three dates.   
+
+```{r genes_genomic_positions, echo=TRUE}
+# Before to be read into R, the original file 
+  # (Malus_x_domestica.v1.0_gene_pep_function_101210.formated.xls) 
+  # has been formatted and saved in a text file.
+
+# Read data file
+gene_positions <- read.table("Malus_x_domestica_v1_0_gene_pep_function_101210.txt",
+                  header=T)
+
+# Add the position information (chromosome, transcript start and stop position) to the 
+  # matrix of genes that showed significant differential expression for at least one of
+  # the three dates. 
+position_genes_modulated_at_least_one_time <- merge(x = gene_positions[,1:4], 
+                    y = genes_modulated_at_least_one_time, by = "genes_seq_id")
+  # Declare variables as character.
+      position_genes_modulated_at_least_one_time$genes_seq_id <- as.character(
+        position_genes_modulated_at_least_one_time$genes_seq_id)
+      position_genes_modulated_at_least_one_time$Scaffold_ID <- as.character(
+        position_genes_modulated_at_least_one_time$Scaffold_ID)
+
+# Save the data frame in a text file.
+    write.table(position_genes_modulated_at_least_one_time, 
+                file = "position_genes_modulated_at_least_one_time.txt", 
+                sep = "\t", quote=FALSE, row.names=FALSE)
+```
+
+Position of SSR markers of the apple segregating population, 'Starkrimson' x 'Granny Smith' (STK x GS), genetic map (Guitton *et al.*, 2011) were retrieved by either blasting the marker sequence (primer or amplicon) available on Hidras database (Hidras, November 2014 , http://www.hidras.unimi.it/index.php), or by using the Genome Database for Rosaceae (GDR, November 2014, http://www.rosaceae.org/, file Malus_x_domestica.v1.0.markers.xls). For SNP markers, the position of the gene prediction (MDP) used to design the marker (Guitton *et al.*, 2011) was considered as the genomic position of the marker.
+
+A file containing genomic position of the genetic markers of the STK x GS map has been thus generated and is now used to compare position of genes with QTL.
+
+```{r STKxGS_genomic_positions, echo=TRUE}
+# Read datafile
+STKxGS_map <- read.table("STKxGS_map.txt", header=T)
+
+# Make a data frame of position information of genes that showed significant differential
+  # expression for at least one of the three dates.
+position_genes_modulated <- position_genes_modulated_at_least_one_time[,1:3]
+colnames(position_genes_modulated) <- c("Marker_name", "chr", "Position_bp")
+
+# Merge the two files  
+position_STKxGS_map <- rbind(STKxGS_map, position_genes_modulated)
+
+# Make a data frame for input in a drawing software
+  position_STKxGS_map$Marker_name <- as.character(position_STKxGS_map$Marker_name)
+  position_STKxGS_map$chr <- as.character(position_STKxGS_map$chr)
+  position_STKxGS_map$Position_bp <- as.numeric(position_STKxGS_map$Position_bp)
+  # Order the data frame by chromosome and position
+  position_STKxGS_map <- position_STKxGS_map[order(position_STKxGS_map$chr, 
+                          position_STKxGS_map$Position_bp, decreasing = FALSE),]
+  
+# Save the data frame in a text file.
+    write.table(position_STKxGS_map, file = "position_STKxGS_map_output.txt", 
+                sep = "\t", quote = FALSE, row.names = FALSE)
+```
+
+
+9. Graphic representation of expression level
+----------------------------------------------
+
+Following the entire analysis, a short list of transcripts appears to be of particular interest for the molecular control of biennial bearing. These transcripts are discussed in the submitted article and to illustrate this discussion, their relative expression values are graphically represented.  
+  
+
+### Fig.10. Kinetics of the relative expression values (log2 ratio) of transcripts differentially expressed in apple meristems between trees initiating flowering ('OFF') and trees inhibiting flowering ('ON') at three developmental stages (28, 48 and 119 DAFB). The array data were normalized with the lowess method. Normalized intensities (i.e. expression levels) were then subtracted from the background. Stars (***) indicate significant differences of expression between the two treatments.
+  
+  
+```{r Graph_Flowering_time_pathway, echo=FALSE, eval=TRUE, fig.width=8, fig.height=8, fig.align='center'}
+# Order  the data frame "Flowering_time_pathway" by the column "AT_Id"
+discussed_MDP <- c("MDP0000119630","MDP0000323622", "MDP0000208351", "MDP0000205651", "MDP0000233761", "MDP0000322279", "MDP0000269516", "MDP0000945267", "MDP0000610136", "MDP0000158607", "MDP0000297978", "MDP0000313995")
+
+discussed_genes <- genes_modulated_at_least_one_time[genes_modulated_at_least_one_time$genes_seq_id%in%discussed_MDP,]
+
+par(mfrow = c(2,2), pty='m')
+for (i in 1:nrow(discussed_genes)) {
+  barplot(height=cbind("28"= c(discussed_genes[i,Expression_T2_D1], discussed_genes[i,Expression_T1_D1]),
+                       "48"= c(discussed_genes[i,Expression_T2_D2], discussed_genes[i,Expression_T1_D2]),
+                       "119"= c(discussed_genes[i,Expression_T2_D3], discussed_genes[i,Expression_T1_D3])),
+          beside = TRUE,
+          width = c(400, 400, 400),
+          ylim = c(0,(max(discussed_genes[i,c(Expression_T1_D1, Expression_T2_D1,Expression_T1_D2, Expression_T2_D2, Expression_T1_D3, Expression_T2_D3)])+1)),
+          ylab="Relative expression (log2 value)",
+          xlab="DAFB",
+          col = c("white", "grey"),
+          cex.main = 1,
+          main=paste(discussed_genes[i,gene_id], "(homologous to ", as.character(discussed_genes[i, AT_id]), ")"))
+if (discussed_genes[i,Pval_D1] <= 0.01) 
+  { text(800, max(discussed_genes[i,Expression_T1_D1], discussed_genes[i,Expression_T2_D1]) + 0.3, labels = "***")  
+  }
+if (discussed_genes[i,Pval_D2] <= 0.01) 
+  { text(2000, max(discussed_genes[i,Expression_T1_D2], discussed_genes[i,Expression_T2_D2]) + 0.3, labels = "***")  
+  }
+if (discussed_genes[i,Pval_D3] <= 0.01) 
+  { text(3200, max(discussed_genes[i,Expression_T1_D3], discussed_genes[i,Expression_T2_D3]) + 0.3, labels = "***")  
+  }
+  }
+```
